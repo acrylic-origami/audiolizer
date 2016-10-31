@@ -1,4 +1,5 @@
 import sys
+import csv
 import math
 import numpy as np
 from scipy import interpolate
@@ -29,11 +30,15 @@ if __name__ == '__main__':
 	# inverse: ln(y/25.572) / 0.0966 = x, df^-1/dt = 1/(0.0966*y)
 	random_offset = None
 	
+	with open(sys.argv[2], 'r') as magic:
+		Q_reader = csv.reader(magic)
+		Q = np.array([[float(n) for n in m] for m in Q_reader], dtype=np.float32).transpose()
+	
 	equal_volume = np.array([0.821059253, 0.701839874, 0.604481024, 0.522845118, 0.454782953, 0.397055186, 0.347950518, 0.307632312, 0.271437057, 0.242110753, 0.214911277, 0.192616329, 0.171671073, 0.155542698, 0.139861868, 0.127910433, 0.115652532, 0.106316477, 0.097065429, 0.089756485, 0.082781142, 0.077048514, 0.071705703, 0.067236434, 0.063192794, 0.060011744, 0.057185781, 0.054681491, 0.052687344, 0.050997177, 0.050273861, 0.050204531, 0.051965253, 0.054669462, 0.055728143, 0.056715939, 0.052960973, 0.048262279, 0.04501948, 0.042000238, 0.041064963, 0.04049001, 0.041528099, 0.043268517, 0.047268319, 0.052921002, 0.061476518, 0.07153775, 0.083075952, 0.093187191, 0.099660587, 0.09808361, 0.090825064, 0.089826522, 0.090890027, 0.190112363, 0.59281672, 1.0000, 1.0000, 1.0000, 1.0000, 1.0000]).reshape(N, 1)
 	
 	V = vid(sys.argv[1])
 	
-	WAV = wave.open(sys.argv[3] + '.wav', 'w')
+	WAV = wave.open(sys.argv[4] + '.wav', 'w')
 	WAV.setframerate(F)
 	WAV.setnchannels(1)
 	WAV.setsampwidth(2) # two bytes per sample
@@ -67,16 +72,17 @@ if __name__ == '__main__':
 	for i in range(N):
 		cv2.rectangle(extension, (int(i * float(W)/N), 0), (int(i * (float(W)/N) + bar_width), 39), [int(color) for color in bar_color], cv2.cv.CV_FILLED)
 		
-	V.initialize(float(sys.argv[2]))
-	# out_video = cv2.VideoWriter(sys.argv[3] + '.mov', cv2.cv.CV_FOURCC(*'mp4v'), V.fps, (W, bottom + extension.shape[0]))
+	V.initialize(float(sys.argv[3]))
+	# out_video = cv2.VideoWriter(sys.argv[4] + '.mov', cv2.cv.CV_FOURCC(*'mp4v'), V.fps, (W, bottom + extension.shape[0]))
 	with warnings.catch_warnings():
 		warnings.filterwarnings('error', 'ooh', UserWarning)
 		try:
-			upper_limit = int(float(sys.argv[4]) * V.fps)
+			upper_limit = int(float(sys.argv[5]) * V.fps)
 		except IndexError:
 			upper_limit = float('inf')
-		lower_limit = int(float(sys.argv[2]) * V.fps)
+		lower_limit = int(float(sys.argv[3]) * V.fps)
 		past_heights = None
+		interps = np.zeros((Q.shape[0], math.ceil(float(min(V.nframes, upper_limit) - lower_limit) / Q.shape[0]) * Q.shape[0]))
 		for j in range(lower_limit, min(V.nframes, upper_limit)):
 			print(j)
 			v = V.read_frame()
@@ -109,15 +115,24 @@ if __name__ == '__main__':
 			# mags = np.zeros(num_audio_frames)
 			mid_fftfreq = (num_audio_frames - 1) // 2 + 1
 			top_freq = min(mid_fftfreq, int((freqs[-1] * num_audio_frames) // F + 1))
-			interpd = interpolate.splev(interp_freqs[1:top_freq], tck).astype(np.complex64)
-			
-			np.savetxt(sys.argv[3] + '.csv', np.absolute(np.vstack((interp_freqs[1:top_freq], interpd))), delimiter=',')
-			input()
+			interps[:,j-lower_limit] = np.resize(interpolate.splev(interp_freqs[0:top_freq], tck).astype(np.float32), Q.shape[0])
+		
+		print('Solving...')
+		interpds = np.zeros((Q.shape[0], interps.shape[1]))
+		for j in range(interps.shape[1] / Q.shape[0]):
+			interpds[:,(j*Q.shape[0]):((j+1)*Q.shape[0])] = np.linalg.solve(Q, interps[:,(j*Q.shape[0]):((j+1)*Q.shape[0])])
+		
+		np.savetxt('%s.csv' % sys.argv[4], interpds, delimiter=',')
+		print('--Constructing waveform--')
+		for j in range(min(V.nframes, upper_limit) - lower_limit):
+			interpd = interpds[:,j].astype(np.complex64)
+			# np.savetxt(sys.argv[4] + '.csv', np.absolute(np.vstack((interp_freqs[0:top_freq], interpd))), delimiter=',')
+			# input()
 			
 			if random_offset == None:
-				random_offset = np.random.rand(top_freq) * math.pi
+				random_offset = np.random.rand(top_freq + 1) * math.pi
 			for k, i in enumerate(interpd):
-				interpd[k] = cmath.rect(i, (float(j - lower_limit) / V.fps) % (1 / interp_freqs[k]) * math.pi * 2.0 + random_offset[k])
+				interpd[k] = cmath.rect(i, (float(j) / V.fps) % (1 / interp_freqs[k]) * math.pi * 2.0 + random_offset[k])
 			half_freqs = np.lib.pad(interpd, (0, mid_fftfreq - top_freq), 'constant', constant_values=(0,))
 			freq_domain = np.hstack(([0], half_freqs, half_freqs[::-1]))
 			
@@ -155,7 +170,7 @@ if __name__ == '__main__':
 			# past_heights = heights
 			# cv2.imshow(str(j), cv2.cvtColor(hsv_frame, cv2.COLOR_HSV2BGR))
 			# bgr_frame = cv2.cvtColor(hsv_frame, cv2.COLOR_HSV2BGR)
-			# cv2.imwrite(sys.argv[3] + '_frame.png', bgr_frame)
+			# cv2.imwrite(sys.argv[4] + '_frame.png', bgr_frame)
 			# out_video.write(bgr_frame)
 		# print((audio_frames * freq_max_amplitude).astype(np.int16))
 		
