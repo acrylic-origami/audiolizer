@@ -6,7 +6,7 @@ imageio==1.6
 matplotlib==1.5.3
 moviepy==0.2.2.11
 numpy==1.10.4
-Pillow==3.1.1
+Pillow==9.3.0
 pyparsing==2.1.9
 pyproj==1.9.5.1
 python-dateutil==2.5.2
